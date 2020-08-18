@@ -36,6 +36,7 @@ import reactor.netty.ConnectionObserver;
 import reactor.netty.channel.ChannelMetricsRecorder;
 import reactor.netty.http.Http2SettingsSpec;
 import reactor.netty.http.HttpProtocol;
+import reactor.netty.tcp.SniProvider;
 import reactor.netty.tcp.SslProvider;
 import reactor.netty.tcp.TcpServer;
 import reactor.netty.transport.ServerTransport;
@@ -327,6 +328,7 @@ public abstract class HttpServer extends ServerTransport<HttpServer, HttpServerC
 	public final HttpServer noSSL() {
 		if (configuration().isSecure()) {
 			HttpServer dup = duplicate();
+			dup.configuration().sniProvider = null;
 			dup.configuration().sslProvider = null;
 			return dup;
 		}
@@ -429,7 +431,42 @@ public abstract class HttpServer extends ServerTransport<HttpServer, HttpServerC
 		HttpServer dup = duplicate();
 		SslProvider.SslContextSpec builder = SslProvider.builder();
 		sslProviderBuilder.accept(builder);
+		dup.configuration().sniProvider = null;
 		dup.configuration().sslProvider = ((SslProvider.Builder) builder).build();
+		return dup;
+	}
+
+	/**
+	 * Applies an SSL configuration via the passed {@link SniProvider}.
+	 *
+	 * If {@link SelfSignedCertificate} needs to be used, the sample below can be
+	 * used. Note that {@link SelfSignedCertificate} should not be used in production.
+	 * <pre>
+	 * {@code
+	 *     SelfSignedCertificate defaultCert = new SelfSignedCertificate("default");
+	 *     SslContextBuilder defaultSslContextBuilder =
+	 *         SslContextBuilder.forServer(defaultCert.certificate(), defaultCert.privateKey());
+	 *
+	 *     SelfSignedCertificate testCert = new SelfSignedCertificate("test.com");
+	 *     SslContextBuilder testSslContextBuilder =
+	 *         SslContextBuilder.forServer(testCert.certificate(), testCert.privateKey());
+	 *
+	 *     SniProvider sniProvider =
+	 *         SniProvider.builder()
+	 *                    .sslProvider(spec -> spec.sslContext(defaultSslContextBuilder))
+	 *                    .add("*.test.com", spec -> spec.sslContext(testSslContextBuilder))
+	 *                    .build();
+	 * }
+	 * </pre>
+	 *
+	 * @param sniProvider The {@link SniProvider} to set when configuring SSL
+	 * @return a new {@link HttpServer}
+	 */
+	public final HttpServer secure(SniProvider sniProvider) {
+		Objects.requireNonNull(sniProvider, "sniProvider");
+		HttpServer dup = duplicate();
+		dup.configuration().sniProvider = sniProvider;
+		dup.configuration().sslProvider = null;
 		return dup;
 	}
 
@@ -454,6 +491,7 @@ public abstract class HttpServer extends ServerTransport<HttpServer, HttpServerC
 	public final HttpServer secure(SslProvider sslProvider) {
 		Objects.requireNonNull(sslProvider, "sslProvider");
 		HttpServer dup = duplicate();
+		dup.configuration().sniProvider = null;
 		dup.configuration().sslProvider = sslProvider;
 		return dup;
 	}

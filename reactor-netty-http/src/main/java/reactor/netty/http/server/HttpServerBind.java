@@ -20,6 +20,7 @@ import io.netty.channel.ChannelOption;
 import io.netty.util.AttributeKey;
 import reactor.core.publisher.Mono;
 import reactor.netty.DisposableServer;
+import reactor.netty.tcp.SniProvider;
 import reactor.netty.tcp.SslProvider;
 import reactor.netty.tcp.TcpServerConfig;
 
@@ -58,6 +59,12 @@ final class HttpServerBind extends HttpServer {
 	@Override
 	public Mono<? extends DisposableServer> bind() {
 		if (config.sslProvider != null) {
+			if ((config._protocols & HttpServerConfig.h2c) == HttpServerConfig.h2c) {
+				return Mono.error(new IllegalArgumentException(
+						"Configured H2 Clear-Text protocol with TLS. " +
+								"Use the non Clear-Text H2 protocol via " +
+								"HttpServer#protocol or disable TLS via HttpServer#noSSL())"));
+			}
 			if (config.sslProvider.getDefaultConfigurationType() == null) {
 				HttpServer dup = duplicate();
 				HttpServerConfig _config = dup.configuration();
@@ -71,11 +78,26 @@ final class HttpServerBind extends HttpServer {
 				}
 				return dup.bind();
 			}
+		}
+		else if (config.sniProvider != null) {
 			if ((config._protocols & HttpServerConfig.h2c) == HttpServerConfig.h2c) {
 				return Mono.error(new IllegalArgumentException(
 						"Configured H2 Clear-Text protocol with TLS. " +
 								"Use the non Clear-Text H2 protocol via " +
 								"HttpServer#protocol or disable TLS via HttpServer#noSSL())"));
+			}
+			if (config.sniProvider.defaultConfigurationType() == null) {
+				HttpServer dup = duplicate();
+				HttpServerConfig _config = dup.configuration();
+				if ((_config._protocols & HttpServerConfig.h2) == HttpServerConfig.h2) {
+					_config.sniProvider = SniProvider.updateAllSslProviderConfiguration(_config.sniProvider,
+							SslProvider.DefaultConfigurationType.H2);
+				}
+				else {
+					_config.sniProvider = SniProvider.updateAllSslProviderConfiguration(_config.sniProvider,
+							SslProvider.DefaultConfigurationType.TCP);
+				}
+				return dup.bind();
 			}
 		}
 		else {

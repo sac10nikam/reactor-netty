@@ -25,6 +25,7 @@ import java.nio.charset.Charset;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.Duration;
+import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -69,6 +70,7 @@ import io.netty.handler.codec.http.HttpUtil;
 import io.netty.handler.codec.http.cookie.ServerCookieDecoder;
 import io.netty.handler.codec.http.cookie.ServerCookieEncoder;
 import io.netty.handler.codec.http.websocketx.WebSocketCloseStatus;
+import io.netty.handler.ssl.SniCompletionEvent;
 import io.netty.handler.ssl.SslContext;
 import io.netty.handler.ssl.SslContextBuilder;
 import io.netty.handler.ssl.util.InsecureTrustManagerFactory;
@@ -94,6 +96,7 @@ import reactor.netty.ConnectionObserver;
 import reactor.netty.DisposableServer;
 import reactor.netty.FutureMono;
 import reactor.netty.NettyOutbound;
+import reactor.netty.NettyPipeline;
 import reactor.netty.channel.AbortedException;
 import reactor.netty.http.HttpProtocol;
 import reactor.netty.http.client.HttpClient;
@@ -101,6 +104,7 @@ import reactor.netty.http.client.HttpClientRequest;
 import reactor.netty.http.client.PrematureCloseException;
 import reactor.netty.resources.ConnectionProvider;
 import reactor.netty.resources.LoopResources;
+import reactor.netty.tcp.SniProvider;
 import reactor.netty.tcp.TcpClient;
 import reactor.netty.tcp.TcpServer;
 import reactor.netty.transport.TransportConfig;
@@ -109,10 +113,15 @@ import reactor.util.context.Context;
 import reactor.util.function.Tuple2;
 import reactor.util.function.Tuple3;
 
+import javax.net.ssl.SNIHostName;
+import javax.net.ssl.SSLEngine;
+import javax.net.ssl.SSLParameters;
+
 import static org.assertj.core.api.Assertions.*;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assume.assumeTrue;
+import static reactor.netty.tcp.SslProvider.DefaultConfigurationType.TCP;
 
 /**
  * @author Stephane Maldini
@@ -1968,5 +1977,67 @@ public class HttpServerTests {
 		assertNotNull(httpServer);
 
 		httpServer.disposeNow();
+	}
+
+	@Test
+	public void testSniSupport() throws Exception {
+		SelfSignedCertificate defaultCert = new SelfSignedCertificate("default");
+		SslContextBuilder defaultSslContextBuilder =
+				SslContextBuilder.forServer(defaultCert.certificate(), defaultCert.privateKey());
+
+		SelfSignedCertificate testCert = new SelfSignedCertificate("test.com");
+		SslContextBuilder testSslContextBuilder =
+				SslContextBuilder.forServer(testCert.certificate(), testCert.privateKey());
+
+		SslContextBuilder clientSslContextBuilder =
+				SslContextBuilder.forClient()
+				                 .trustManager(InsecureTrustManagerFactory.INSTANCE);
+
+		SniProvider sniProvider =
+				SniProvider.builder()
+				           .sslProvider(spec -> spec.sslContext(defaultSslContextBuilder))
+				           .add("*.test.com", spec -> spec.sslContext(testSslContextBuilder))
+				           .build();
+
+		AtomicReference<String> hostname = new AtomicReference<>();
+		disposableServer =
+				HttpServer.create()
+				          .port(0)
+				          .wiretap(true)
+				          .secure(sniProvider)
+				          .doOnChannelInit((obs, channel, remoteAddress) ->
+				              channel.pipeline()
+				                     .addAfter(NettyPipeline.SslHandler, "test", new ChannelInboundHandlerAdapter() {
+				                         @Override
+				                         public void userEventTriggered(ChannelHandlerContext ctx, Object evt) {
+				                             if (evt instanceof SniCompletionEvent) {
+				                                 hostname.set(((SniCompletionEvent) evt).hostname());
+				                             }
+				                             ctx.fireUserEventTriggered(evt);
+				                         }
+				                     }))
+				          .handle((req, res) -> res.sendString(Mono.just("testSniSupport")))
+				          .bindNow();
+
+		HttpClient.create()
+		          .remoteAddress(disposableServer::address)
+		          .wiretap(true)
+		          .secure(spec -> spec.sslContext(clientSslContextBuilder)
+		                              .defaultConfiguration(TCP)
+		                              .handlerConfigurator(h -> {
+		                                  SSLEngine engine = h.engine();
+		                                  SSLParameters sslParameters = engine.getSSLParameters();
+		                                  sslParameters.setServerNames(
+		                                          Collections.singletonList(new SNIHostName("test.com")));
+		                                  engine.setSSLParameters(sslParameters);
+		          }))
+		          .get()
+		          .uri("/")
+		          .responseContent()
+		          .aggregate()
+		          .block(Duration.ofSeconds(30));
+
+		assertNotNull(hostname.get());
+		assertEquals("test.com", hostname.get());
 	}
 }

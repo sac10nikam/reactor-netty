@@ -52,8 +52,8 @@ import reactor.netty.http.Http2SettingsSpec;
 import reactor.netty.http.HttpProtocol;
 import reactor.netty.http.HttpResources;
 import reactor.netty.resources.LoopResources;
+import reactor.netty.tcp.SniProvider;
 import reactor.netty.tcp.SslProvider;
-import reactor.netty.tcp.TcpServer;
 import reactor.netty.transport.ServerTransportConfig;
 import reactor.util.Logger;
 import reactor.util.Loggers;
@@ -139,7 +139,7 @@ public final class HttpServerConfig extends ServerTransportConfig<HttpServerConf
 	 * @return true if that {@link HttpServer} secured via SSL transport
 	 */
 	public boolean isSecure() {
-		return sslProvider != null;
+		return sslProvider != null || sniProvider != null;
 	}
 
 	/**
@@ -171,15 +171,16 @@ public final class HttpServerConfig extends ServerTransportConfig<HttpServerConf
 	}
 
 	/**
-	 * Returns the current {@link SslProvider} if that {@link TcpServer} secured via SSL
-	 * transport or null
+	 * Returns the current {@link SslProvider} if that {@link HttpServer} secured via SSL
+	 * transport or null. If {@link SniProvider} is configured, this method will return
+	 * the default {@link SslProvider}.
 	 *
-	 * @return the current {@link SslProvider} if that {@link TcpServer} secured via SSL
+	 * @return the current {@link SslProvider} if that {@link HttpServer} secured via SSL
 	 * transport or null
 	 */
 	@Nullable
 	public SslProvider sslProvider() {
-		return sslProvider;
+		return sniProvider != null? sniProvider.defaultSslProvider() : sslProvider;
 	}
 
 	/**
@@ -207,6 +208,7 @@ public final class HttpServerConfig extends ServerTransportConfig<HttpServerConf
 	HttpProtocol[]                                     protocols;
 	int                                                _protocols;
 	ProxyProtocolSupportType                           proxyProtocolSupportType;
+	SniProvider                                        sniProvider;
 	SslProvider                                        sslProvider;
 	Function<String, String>                           uriTagValue;
 
@@ -234,6 +236,7 @@ public final class HttpServerConfig extends ServerTransportConfig<HttpServerConf
 		this.protocols = parent.protocols;
 		this._protocols = parent._protocols;
 		this.proxyProtocolSupportType = parent.proxyProtocolSupportType;
+		this.sniProvider = parent.sniProvider;
 		this.sslProvider = parent.sslProvider;
 		this.uriTagValue = parent.uriTagValue;
 	}
@@ -258,7 +261,7 @@ public final class HttpServerConfig extends ServerTransportConfig<HttpServerConf
 		return super.defaultOnChannelInit()
 		            .then(new HttpServerChannelInitializer(compressPredicate, cookieDecoder, cookieEncoder,
 		                decoder, forwarded, http2Settings(), metricsRecorder(), minCompressionSize, channelOperationsProvider(),
-		                    _protocols, proxyProtocolSupportType, sslProvider, uriTagValue));
+		                    _protocols, proxyProtocolSupportType, sniProvider, sslProvider, uriTagValue));
 	}
 
 	@Override
@@ -704,6 +707,7 @@ public final class HttpServerConfig extends ServerTransportConfig<HttpServerConf
 		final ChannelOperations.OnSetup                          opsFactory;
 		final int                                                protocols;
 		final ProxyProtocolSupportType                           proxyProtocolSupportType;
+		final SniProvider                                        sniProvider;
 		final SslProvider                                        sslProvider;
 		final Function<String, String>                           uriTagValue;
 
@@ -719,6 +723,7 @@ public final class HttpServerConfig extends ServerTransportConfig<HttpServerConf
 				ChannelOperations.OnSetup opsFactory,
 				int protocols,
 				ProxyProtocolSupportType proxyProtocolSupportType,
+				@Nullable SniProvider sniProvider,
 				@Nullable SslProvider sslProvider,
 				@Nullable Function<String, String> uriTagValue) {
 			this.compressPredicate = compressPredicate;
@@ -732,6 +737,7 @@ public final class HttpServerConfig extends ServerTransportConfig<HttpServerConf
 			this.opsFactory = opsFactory;
 			this.protocols = protocols;
 			this.proxyProtocolSupportType = proxyProtocolSupportType;
+			this.sniProvider = sniProvider;
 			this.sslProvider = sslProvider;
 			this.uriTagValue = uriTagValue;
 		}
@@ -740,8 +746,13 @@ public final class HttpServerConfig extends ServerTransportConfig<HttpServerConf
 		public void onChannelInit(ConnectionObserver observer, Channel channel, @Nullable SocketAddress remoteAddress) {
 			boolean needRead = false;
 
-			if (sslProvider != null) {
-				sslProvider.addSslHandler(channel, remoteAddress, SSL_DEBUG);
+			if (sslProvider != null || sniProvider != null) {
+				if (sslProvider != null) {
+					sslProvider.addSslHandler(channel, remoteAddress, SSL_DEBUG);
+				}
+				else {
+					sniProvider.addSniHandler(channel, SSL_DEBUG);
+				}
 
 				if ((protocols & h11orH2) == h11orH2) {
 					channel.pipeline()

@@ -139,6 +139,7 @@ public abstract class TcpServer extends ServerTransport<TcpServer, TcpServerConf
 	public TcpServer noSSL() {
 		if (configuration().isSecure()) {
 			TcpServer dup = duplicate();
+			dup.configuration().sniProvider = null;
 			dup.configuration().sslProvider = null;
 			return dup;
 		}
@@ -190,7 +191,42 @@ public abstract class TcpServer extends ServerTransport<TcpServer, TcpServerConf
 		TcpServer dup = duplicate();
 		SslProvider.SslContextSpec builder = SslProvider.builder();
 		sslProviderBuilder.accept(builder);
+		dup.configuration().sniProvider = null;
 		dup.configuration().sslProvider = ((SslProvider.Builder) builder).build();
+		return dup;
+	}
+
+	/**
+	 * Applies an SSL configuration via the passed {@link SniProvider}.
+	 *
+	 * If {@link SelfSignedCertificate} needs to be used, the sample below can be
+	 * used. Note that {@link SelfSignedCertificate} should not be used in production.
+	 * <pre>
+	 * {@code
+	 *     SelfSignedCertificate defaultCert = new SelfSignedCertificate("default");
+	 *     SslContextBuilder defaultSslContextBuilder =
+	 *         SslContextBuilder.forServer(defaultCert.certificate(), defaultCert.privateKey());
+	 *
+	 *     SelfSignedCertificate testCert = new SelfSignedCertificate("test.com");
+	 *     SslContextBuilder testSslContextBuilder =
+	 *         SslContextBuilder.forServer(testCert.certificate(), testCert.privateKey());
+	 *
+	 *     SniProvider sniProvider =
+	 *         SniProvider.builder()
+	 *                    .sslProvider(spec -> spec.sslContext(defaultSslContextBuilder))
+	 *                    .add("*.test.com", spec -> spec.sslContext(testSslContextBuilder))
+	 *                    .build();
+	 * }
+	 * </pre>
+	 *
+	 * @param sniProvider The {@link SniProvider} to set when configuring SSL
+	 * @return a new {@link TcpServer}
+	 */
+	public final TcpServer secure(SniProvider sniProvider) {
+		Objects.requireNonNull(sniProvider, "sniProvider");
+		TcpServer dup = duplicate();
+		dup.configuration().sniProvider = sniProvider;
+		dup.configuration().sslProvider = null;
 		return dup;
 	}
 
@@ -215,6 +251,7 @@ public abstract class TcpServer extends ServerTransport<TcpServer, TcpServerConf
 	public TcpServer secure(SslProvider sslProvider) {
 		Objects.requireNonNull(sslProvider, "sslProvider");
 		TcpServer dup = duplicate();
+		dup.configuration().sniProvider = null;
 		dup.configuration().sslProvider = sslProvider;
 		return dup;
 	}

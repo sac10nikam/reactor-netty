@@ -50,25 +50,27 @@ public final class TcpServerConfig extends ServerTransportConfig<TcpServerConfig
 	 *
 	 * @return true if that {@link TcpServer} secured via SSL transport
 	 */
-	public final boolean isSecure(){
-		return sslProvider != null;
+	public final boolean isSecure() {
+		return sslProvider != null || sniProvider != null;
 	}
 
 	/**
 	 * Returns the current {@link SslProvider} if that {@link TcpServer} secured via SSL
-	 * transport or null
+	 * transport or null. If {@link SniProvider} is configured, this method will return
+	 * the default {@link SslProvider}.
 	 *
 	 * @return the current {@link SslProvider} if that {@link TcpServer} secured via SSL
 	 * transport or null
 	 */
 	@Nullable
 	public SslProvider sslProvider() {
-		return sslProvider;
+		return sniProvider != null? sniProvider.defaultSslProvider : sslProvider;
 	}
 
 
 	// Protected/Package private write API
 
+	SniProvider sniProvider;
 	SslProvider sslProvider;
 
 	TcpServerConfig(Map<ChannelOption<?>, ?> options, Map<ChannelOption<?>, ?> childOptions,
@@ -79,6 +81,7 @@ public final class TcpServerConfig extends ServerTransportConfig<TcpServerConfig
 	TcpServerConfig(TcpServerConfig parent) {
 		super(parent);
 		this.sslProvider = parent.sslProvider;
+		this.sniProvider = parent.sniProvider;
 	}
 
 	@Override
@@ -101,6 +104,9 @@ public final class TcpServerConfig extends ServerTransportConfig<TcpServerConfig
 		ChannelPipelineConfigurer _default = super.defaultOnChannelInit();
 		if (sslProvider != null) {
 			return _default.then(new TcpServerChannelInitializer(sslProvider));
+		}
+		else if (sniProvider != null) {
+			return _default.then(new TcpServerChannelInitializer(sniProvider));
 		}
 		else {
 			return _default;
@@ -128,15 +134,27 @@ public final class TcpServerConfig extends ServerTransportConfig<TcpServerConfig
 
 	static final class TcpServerChannelInitializer implements ChannelPipelineConfigurer {
 
+		final SniProvider sniProvider;
 		final SslProvider sslProvider;
 
+		TcpServerChannelInitializer(SniProvider sniProvider) {
+			this.sniProvider = sniProvider;
+			this.sslProvider = null;
+		}
+
 		TcpServerChannelInitializer(SslProvider sslProvider) {
+			this.sniProvider = null;
 			this.sslProvider = sslProvider;
 		}
 
 		@Override
 		public void onChannelInit(ConnectionObserver connectionObserver, Channel channel, @Nullable SocketAddress remoteAddress) {
-			sslProvider.addSslHandler(channel, remoteAddress, SSL_DEBUG);
+			if (sslProvider != null) {
+				sslProvider.addSslHandler(channel, remoteAddress, SSL_DEBUG);
+			}
+			else {
+				sniProvider.addSniHandler(channel, SSL_DEBUG);
+			}
 		}
 	}
 }
